@@ -1,0 +1,54 @@
+{
+  "name": "ESP_OTA",
+  "version": "1.0.0",
+  "description": "Mise a jour du firmware par HTTP en UNE etape (Update.h du coeur Arduino), pour serveur web synchrone ESP8266/ESP32. Remplace ElegantOTA : plus de protocole /ota/start + /ota/upload, plus de faux 200 OK quand rien n'a ete ecrit, redemarrage differe, garde contre le crash distant par POST non multipart. Retire ESPAsyncWebServer et ESPAsyncTCP de l'arbre de dependances. Header-only, aucune allocation dynamique pour la page.",
+  "keywords": [
+    "ota",
+    "update",
+    "firmware",
+    "esp8266",
+    "esp32",
+    "http",
+    "upload",
+    "elegantota"
+  ],
+  "authors": [
+    {
+      "name": "Olivier FOURNET",
+      "email": "olivier.fournet@free.fr",
+      "url": "https://github.com/Fo170",
+      "maintainer": true
+    }
+  ],
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fo170/ESP_OTA.git"
+  },
+  "homepage": "https://github.com/Fo170/ESP_OTA",
+  "frameworks": "arduino",
+  "platforms": [
+    "espressif8266",
+    "espressif32"
+  ],
+  "headers": "ESP_OTA.h",
+  "build": {
+    "srcDir": "src"
+  },
+  "examples": [
+    {
+      "name": "Basique - un serveur, une route /update",
+      "base": "examples/Basique",
+      "files": ["examples/Basique/Basique.ino"]
+    }
+  ],
+  "export": {
+    "exclude": [
+      ".github",
+      "docs",
+      "*.md",
+      "*.yml",
+      "*.txt"
+    ]
+  }
+}
