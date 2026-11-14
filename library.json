@@ -1,6 +1,6 @@
 {
   "name": "ESP_OTA",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Mise a jour du firmware par HTTP en UNE etape (Update.h du coeur Arduino), pour serveur web synchrone ESP8266/ESP32. Remplace ElegantOTA : plus de protocole /ota/start + /ota/upload, plus de faux 200 OK quand rien n'a ete ecrit, redemarrage differe, garde contre le crash distant par POST non multipart. Retire ESPAsyncWebServer et ESPAsyncTCP de l'arbre de dependances. Header-only, aucune allocation dynamique pour la page.",
   "keywords": [
     "ota",

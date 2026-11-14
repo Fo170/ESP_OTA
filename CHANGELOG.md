@@ -5,6 +5,43 @@ Format : [SemVer](https://semver.org/lang/fr/). Chaque entrée dit **quoi**,
 
 ---
 
+## [1.0.1] — 14/11/2026
+
+### Corrigé
+
+- **Page `/update` tronquée** (`_page()`, `char b[160]`). Le tampon sert aux
+  **deux** `snprintf` ; le second produit **231 octets** mesurés pour la route
+  par défaut. Au-delà de 159 caractères la fin était perdue :
+  - la commande `curl -F firmware=@firmware.bin http://<ip>/update` affichée à
+    l'utilisateur s'arrêtait au milieu du nom de fichier — précisément l'aide
+    qu'on lit quand un envoi échoue ;
+  - les balises `</div></div></body></html>` disparaissaient.
+
+  Invisible à l'œil : le navigateur referme le HTML tout seul, donc la page
+  *paraissait* correcte. Détecté par le compilateur, qui le signalait depuis la
+  1.0.0 sur les 10 projets du parc :
+  ```
+  ESP_OTA.h:375: warning: directive output truncated writing 187 bytes
+                         into a region of size 160 [-Wformat-truncation=]
+  ```
+  Tampon porté à **256 o**, qui couvre les deux messages (110 o et 231 o).
+
+### Vérifié
+
+- `pio run -e d1_mini -e d1_mini_safe` sur `WeMos Mini (Lolin) - LinkysTIC` :
+  build OK, plus aucun `-Wformat-truncation` provenant de `ESP_OTA.h`.
+
+### Non corrigé (limite du coeur, hors librairie)
+
+- `Parsing-impl.h:336` du coeur ESP8266 : `_uploadReadByte()` boucle
+  `while (!client.available() && client.connected()) yield();` **sans timeout**.
+  Un client qui envoie ses en-têtes puis se tait fige `handleClient()` à vie.
+  `chienDeGarde()` ne peut pas aider sur ESP8266 (`CM_WatchDogAdd/Reset` de
+  Crash_ESP_Monitor sont des no-ops `#if defined(ESP32)`). Seul remède :
+  coupure de courant.
+
+---
+
 ## [1.0.0] — 14/11/2026
 
 Première version publiée. Remplace ElegantOTA sur les serveurs web synchrones

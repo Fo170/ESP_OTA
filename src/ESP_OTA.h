@@ -72,7 +72,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#define __ESP_OTA_H_VERSION__ "1.0.0"
+#define __ESP_OTA_H_VERSION__ "1.0.1"
 #define ESP_OTA_VERSION       __ESP_OTA_H_VERSION__
 
 // Route par défaut. Doit rester `/update` : c'est ce que les scripts, les
@@ -362,7 +362,13 @@ private:
                               "<input type='file' name='firmware' accept='.bin'> "
                               "<input type='submit' value='Envoyer'></form>"));
 
-    char b[160];
+    // ⚠️ 256, PAS 160 : les DEUX messages partagent ce tampon et le second en
+    //    réclame 231 o (mesuré). À 160 la fin était coupée — la commande curl
+    //    affichée s'arrêtait au milieu du nom de fichier et les balises
+    //    `</div></div></body></html>` disparaissaient. Le navigateur rattrapant
+    //    le HTML incomplet, le défaut restait invisible (relevé le 14/11/2026
+    //    via -Wformat-truncation sur les 10 projets du parc).
+    char b[256];
     snprintf(b, sizeof(b),
              "<p>Espace libre pour l'OTA : <b>%lu o</b></p>"
              "<p>Version installee : <code>%s</code></p>",
