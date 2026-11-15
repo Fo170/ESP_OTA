@@ -1,7 +1,7 @@
 {
   "name": "ESP_OTA",
-  "version": "1.0.1",
-  "description": "Mise a jour du firmware par HTTP en UNE etape (Update.h du coeur Arduino), pour serveur web synchrone ESP8266/ESP32. Remplace ElegantOTA : plus de protocole /ota/start + /ota/upload, plus de faux 200 OK quand rien n'a ete ecrit, redemarrage differe, garde contre le crash distant par POST non multipart. Retire ESPAsyncWebServer et ESPAsyncTCP de l'arbre de dependances. Header-only, aucune allocation dynamique pour la page.",
+  "version": "1.1.0",
+  "description": "Mise a jour du firmware par HTTP en UNE etape (Update.h du coeur Arduino), pour serveur web SYNCHRONE (WebServer / ESP8266WebServer) et ASYNCHRONE (AsyncWebServer) ESP8266/ESP32. Trois fichiers : ESP_OTA.h (tronc commun : version, etat, acces Update), ESP_OTA_Sync.h, ESP_OTA_Async.h. Remplace ElegantOTA : plus de protocole /ota/start + /ota/upload, plus de faux 200 OK quand rien n'a ete ecrit, redemarrage differe, garde contre le crash distant par POST non multipart. Aucune dependance : l'adaptateur asynchrone est opt-in et seul son utilisateur declare ESPAsyncWebServer.",
   "keywords": [
     "ota",
     "update",
@@ -10,7 +10,9 @@
     "esp32",
     "http",
     "upload",
-    "elegantota"
+    "elegantota",
+    "asyncwebserver",
+    "webserver"
   ],
   "authors": [
     {
@@ -31,15 +33,24 @@
     "espressif8266",
     "espressif32"
   ],
-  "headers": "ESP_OTA.h",
+  "headers": [
+    "ESP_OTA.h",
+    "ESP_OTA_Sync.h",
+    "ESP_OTA_Async.h"
+  ],
   "build": {
     "srcDir": "src"
   },
   "examples": [
     {
-      "name": "Basique - un serveur, une route /update",
+      "name": "Basique - serveur SYNCHRONE, route /update",
       "base": "examples/Basique",
       "files": ["examples/Basique/Basique.ino"]
+    },
+    {
+      "name": "Basique_Async - serveur ASYNCHRONE, route /update",
+      "base": "examples/Basique_Async",
+      "files": ["examples/Basique_Async/Basique_Async.ino"]
     }
   ],
   "export": {

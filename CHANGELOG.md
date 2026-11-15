@@ -5,6 +5,127 @@ Format : [SemVer](https://semver.org/lang/fr/). Chaque entrée dit **quoi**,
 
 ---
 
+## [1.1.0] — 15/11/2026
+
+### Ajouté
+
+- **Compatibilité `AsyncWebServer`.** La librairie ne fonctionnait qu'avec un
+  serveur synchrone. Elle couvre désormais les deux, sans que le chemin
+  synchrone change d'une ligne.
+- **Découpe en trois fichiers**, une responsabilité chacun :
+
+  | Fichier | Rôle | En-tête de serveur inclus |
+  |---|---|---|
+  | `ESP_OTA.h` | **tronc commun** : version, réglages, `OtaEtat`, accès `Update` | **aucun** |
+  | `ESP_OTA_Sync.h` | adaptateur `WebServer` / `ESP8266WebServer` | oui |
+  | `ESP_OTA_Async.h` | adaptateur `AsyncWebServer` | oui (`ESPAsyncWebServer.h`) |
+
+  Le tronc ne contenant aucun en-tête de serveur, un projet synchrone ne tire
+  pas `ESPAsyncWebServer` et un projet asynchrone ne tire pas `WebServer.h`.
+
+- `examples/Basique_Async/` — exemple minimal pour `AsyncWebServer`.
+
+### Compatibilité ascendante 1.x
+
+`#include <ESP_OTA.h>` **reste équivalent** : le tronc inclut `ESP_OTA_Sync.h`
+à la fin, sauf si `ESP_OTA_ASYNC_H` est défini (`ESP_OTA_Async.h` le définit
+avant d'inclure le tronc) ou si l'appelant définit `ESP_OTA_TRONC_SEUL`.
+**Aucun des 10 binaires du parc n'a besoin d'être modifié** — vérifié par
+compilation d'un `main.cpp` 1.x inchangé.
+
+### API asynchrone — identique à la synchrone
+
+`ESP_OTA_Async<Serveur>` expose exactement les mêmes méthodes :
+`begin`, `identifiants`, `chienDeGarde`, `delaiSansOctet`, `transfertMort`,
+`avantUpload`, `tailleInconnue`, `liberer`, `loop`, `enCours`, `rebootDu`,
+`etat`, `suspendu`, `delaiRedemarrage`, `titre`, `surDebut`, `surProgression`,
+`surFin`. La migration d'un projet est un changement d'en-tête et de type.
+
+### Neuf divergences réelles, vérifiées dans le source d'ESPAsyncWebServer 3.7.3
+
+Aucune n'est une supposition : chacune est tracée à une ligne du framework.
+
+| # | Constat | Ligne du framework | Traitement |
+|---|---|---|---|
+| A1 | `handleUpload` n'est appelé que si `_isMultipart` — le chemin RAW et son pointeur nul n'existent pas | `WebRequest.cpp:172` | Garde I3 conservée comme filtre défensif, mais le **crash distant est impossible par construction** |
+| A2 | Un fichier de 0 octet ne délivre **jamais** `final` | `WebRequest.cpp:596` (`if (_itemSize)`) | `_arme` mémorise `Update.begin()` ; `_final()` abandonne si aucun signal de fin n'est venu |
+| A3 | Pas d'`UPLOAD_FILE_ABORTED` | — | `request->onDisconnect()` — qui se déclenche **aussi après un succès** → garde N2 obligatoire |
+| A4 | Pas de `sendContent()` chunked | `RESPONSE_STREAM_BUFFER_SIZE = 1460` | `beginResponseStream()` : 1460 o de tas, libérés après envoi. **I6 n'est pas tenu, il est mesuré** (voir plus bas) |
+| A5 | Callbacks dans la tâche TCP, pas dans `loop()` | — | `suspendu()` devient **obligatoire**, pas conseillé |
+| A6 | Pas de `collectHeaders()` | — | Un piège de moins que le synchrone |
+| A7 | `requestAuthentication()` est **DIGEST** par défaut | `ESPAsyncWebServer.h:317` (`isDigest = true`) | Force `AsyncAuthType::AUTH_BASIC`, sinon `curl -F` reçoit 401 en boucle |
+| A8 | `Update.begin()` dans la tâche TCP | — | Accepté sur ESP32 ; sur ESP8266 **compilé mais non validé par la mesure** |
+| A9 | Deux uploads simultanés écriraient dans le même `Update` | — | Le second est refusé (503) et ses morceaux ignorés via `_reqConflit` |
+
+### Mesuré
+
+**RAM statique de l'instance** (`nm --print-size`, identique sur les deux
+plateformes) :
+
+| Classe | Taille |
+|---|---|
+| `ESP_OTA<Serveur>` (synchrone) | **148 o** |
+| `ESP_OTA_Async<Serveur>` (asynchrone) | **160 o** |
+
+Les +12 o sont `_reqRefusee` + `_reqAuthKo` + `_codeRefus` + `_arme` : le prix
+du suivi par requête qu'impose la concurrence (A9).
+
+**Code généré** (ESP8266, où les symboles sont lisibles) :
+
+| Fonction | Synchrone | Asynchrone | Δ |
+|---|---|---|---|
+| `_page()` | 243 o | 254 o | +11 o |
+| `_morceau()` | 747 o | 780 o | +33 o |
+
+**Page HTML — I6 ne peut pas être tenu en asynchrone** :
+
+| | Synchrone | Asynchrone |
+|---|---|---|
+| Envoi | `sendContent()` chunked | `beginResponseStream()` |
+| RAM **statique** pour la page | 0 | **0** |
+| Pic de **tas** | 0 | **1460 o** (`RESPONSE_STREAM_BUFFER_SIZE`) + ~48 o d'objet, libérés après envoi |
+| Tampon `char[256]` des messages | oui | oui (identique) |
+
+La page mesure ~980 o : elle tient dans le `reserve(1460)`, donc **aucune
+réallocation** du `String` interne. La RAM statique reste nulle dans les deux
+cas — c'est le pic de tas qui augmente, et il est chiffré plutôt que nié.
+
+**Chemin synchrone : aucune régression.** Avant et après la découpe, mêmes
+chiffres au bit près :
+
+| Cible | RAM | Flash |
+|---|---|---|
+| `esp32dev` | 27 172 o | 480 900 o |
+| `esp12e` | 29 472 o | 311 171 o |
+
+### Vérifié
+
+Trois projets de test, deux plateformes, compilation sans aucun avertissement
+provenant de la librairie (`-Wall`) :
+
+| Projet de test | En-tête inclus | `esp32dev` | `esp12e` |
+|---|---|---|---|
+| synchrone | `<ESP_OTA_Sync.h>` | SUCCESS | SUCCESS |
+| rétro-compat 1.x | `<ESP_OTA.h>` | SUCCESS | SUCCESS |
+| asynchrone | `<ESP_OTA_Async.h>` | SUCCESS | SUCCESS |
+
+- Preuve de la découpe : le projet asynchrone contient
+  `#ifdef WEBSERVER_H #error` après ses `#include` → il compile, donc
+  `WebServer.h` **n'a pas** été tiré.
+- Preuve de la compatibilité : le projet « rétro-compat » est du code 1.x
+  inchangé (`#include <ESP_OTA.h>` + `ESP_OTA<WebServer> ota;`) → compile
+  sans modification.
+
+### Non vérifié — à mesurer avant tout déploiement
+
+- **A8 (ESP8266)** : `Update.begin()` / `Update.write()` depuis la tâche TCP
+  asynchrone. Compile, mais `UpdaterClass` n'a pas été conçu pour ce contexte.
+  À valider par un transfert réel sur une carte avant usage en production.
+- **A5** : la corruption du système de fichiers en cas d'oubli de
+  `suspendu()` est un raisonnement, pas une reproduction.
+
+---
+
 ## [1.0.1] — 14/11/2026
 
 ### Corrigé

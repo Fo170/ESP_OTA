@@ -8,7 +8,7 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>          // ou <WiFi.h> sur ESP32
 #include <ESP8266WebServer.h>     // ou <WebServer.h> sur ESP32
-#include <ESP_OTA.h>
+#include <ESP_OTA_Sync.h>
 
 const char* WIFI_SSID = "mon-reseau";
 const char* WIFI_PASS = "mon-mot-de-passe";
