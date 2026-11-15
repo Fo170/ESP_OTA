@@ -36,6 +36,15 @@ fin, sauf si `ESP_OTA_ASYNC_H` est défini (`ESP_OTA_Async.h` le fait) ou si
 l'appelant définit `ESP_OTA_TRONC_SEUL`. **Aucun projet existant n'a besoin
 d'être modifié.**
 
+| Code 1.x (inchangé) | Code 1.1.0 explicite |
+|---|---|
+| `#include <ESP_OTA.h>` | `#include <ESP_OTA_Sync.h>` |
+| `ESP_OTA<WebServer> ota;` | `ESP_OTA<WebServer> ota;` (identique) |
+
+`ESP_OTA_TRONC_SEUL` n'a qu'un usage : obtenir **uniquement** le tronc (types et
+accès `Update`) sans aucun adaptateur. Rare — utile pour un test ou un wrapper
+tiers.
+
 ---
 
 ## Pourquoi
@@ -146,23 +155,37 @@ curl -F firmware=@.pio/build/esp12e/firmware.bin http://192.168.1.105/update
 
 ## API
 
+`ESP_OTA<Serveur>` et `ESP_OTA_Async<Serveur>` exposent **exactement la même
+API**. Les tableaux ci-dessous valent pour les deux.
+
+### Cycle de vie
+
+| Méthode | Effet |
+|---|---|
+| `begin(server, route="/update", titre=nullptr, gardeMultipart=true, routeUpload=nullptr)` | enregistre `GET <route>` (page) et `POST <routeUpload>` (image). `routeUpload` à `nullptr` = même URL que la page |
+| `loop()` | redémarrage différé — **à appeler à chaque tour de boucle** |
+| `liberer()` | libère l'état du transfert et désabonne le chien de garde. Idempotent, appelé en interne sur tous les chemins de sortie |
+
 ### Configuration
 
 | Méthode | Effet |
 |---|---|
-| `begin(server, route="/update", titre=nullptr, gardeMultipart=true)` | enregistre les routes |
-| `identifiants(user, pass)` | protège page et upload par HTTP Basic |
+| `identifiants(user, pass)` | protège page et upload par HTTP Basic. À appeler **avant** `begin()` |
+| `avantUpload(f)` | `f()` appelé **avant** `Update.begin()`. Retourner `false` annule l'envoi (réponse `403`), rien n'est écrit en flash. C'est l'endroit du contrôle anti-CSRF / quota |
+| `tailleInconnue(bool)` | `true` = `UPDATE_SIZE_UNKNOWN` (ESP32 seulement) : le cœur choisit la partition. `false` (défaut) = espace sketch libre − marge |
+| `chienDeGarde(ajouter, rearmer, retirer)` | abonne un watchdog pendant tout le transfert. `nullptr` pour désactiver |
 | `delaiRedemarrage(ms)` | délai entre la réponse et le reboot (défaut 1500 ms) |
+| `delaiSansOctet(ms)` | silence toléré entre deux morceaux avant de déclarer le transfert mort. `0` = désactivé. Défaut 30 s |
 | `titre(texte)` | titre de la page |
 
 ### État
 
 | Méthode | Effet |
 |---|---|
-| `suspendu()` | **l'application doit s'abstenir de toute activité** (transfert en cours OU redémarrage imminent) |
+| `suspendu()` | **l'application doit s'abstenir de toute activité** (transfert en cours OU redémarrage imminent). Couvre les deux fenêtres |
 | `enCours()` | un upload est en cours — **à tester avant tout `ESP.restart()`** |
 | `rebootDu()` | un redémarrage est programmé |
-| `transfertMort()` | plus aucun octet depuis `delaiSansOctet()` |
+| `transfertMort()` | plus aucun octet depuis `delaiSansOctet()` — à tester depuis la boucle |
 | `etat()` | `OtaEtat` : taille, durée, tentatives, succès, échecs, dernier résultat, message |
 
 ### Crochets
@@ -173,9 +196,36 @@ curl -F firmware=@.pio/build/esp12e/firmware.bin http://192.168.1.105/update
 | `surProgression(f)` | `f(octetsEcrits)` à chaque paquet |
 | `surFin(f)` | `f(bool ok)` en fin de transfert |
 
+### `OtaEtat` — structure exposée par `etat()`
+
+| Champ | Sens |
+|---|---|
+| `enCours` | un upload est en cours |
+| `redemarrageDu` | un redémarrage est programmé |
+| `taille` | octets écrits dans le transfert courant |
+| `debutMs` | `millis()` du début du transfert |
+| `dernierOctetMs` | `millis()` du dernier morceau reçu (garde F1) |
+| `dureeMs` | durée du **dernier** transfert terminé |
+| `tentatives` | POST multipart reçus |
+| `succes` / `echecs` | compteurs |
+| `chienAbonne` | le chien de garde est abonné (garde N1) |
+| `dernier` | `OTA_AUCUN` / `OTA_OK` / `OTA_ECHEC` / `OTA_ABANDON` |
+| `message` | dernier diagnostic lisible (`char[48]`) |
+
+### Macros de réglage à la compilation
+
+| Macro | Défaut | Effet |
+|---|---|---|
+| `ESP_OTA_ROUTE_DEFAUT` | `"/update"` | route par défaut |
+| `ESP_OTA_MARGE` | `0x1000` | marge sous l'espace sketch |
+| `ESP_OTA_DELAI_REBOOT_MS` | `1500` | délai avant redémarrage |
+| `ESP_OTA_DELAI_MORT_MS` | `30000` | silence toléré entre deux morceaux |
+| `ESP_OTA_VERSION` | `"1.1.0"` | version de la librairie |
+
 ---
 
 ## ⚠️ Points d'attention — synchrone
+
 
 ### `collectHeaders`
 
