@@ -5,6 +5,63 @@ Format : [SemVer](https://semver.org/lang/fr/). Chaque entrée dit **quoi**,
 
 ---
 
+## [1.1.1] — 23/11/2026
+
+### Corrigé
+
+- **🔴 `_arme` n'était pas rattaché à la requête qui l'avait armé — le
+  `_final()` d'un envoi abandonné DÉTRUISAIT le transfert d'un envoi plus
+  récent.** `_arme` est un état GLOBAL. Séquence de panne : la requête A arme
+  l'image puis se tait (socket ouverte, corps jamais transmis) ; l'application
+  l'abandonne (ou la carte reste bloquée) ; la requête B démarre un nouveau
+  transfert, `Update.begin()` réussit et `_arme` repasse à vrai ; puis le socket
+  de A se ferme enfin et `_final(A)` exécute
+  `if (!ok && _arme) esp_otaAbandonner();` → **l'image de B est abandonnée**.
+  La librairie suivait déjà l'identité de la requête pour `_reqRefusee` et
+  `_reqAuthKo` (A9) : `_arme` était le seul état qui y échappait.
+  → nouveau `_reqArmee`, et `_final()` ne libère que l'image **que cette
+  requête a armée**.
+
+- **🔴 `_deconnexion()` sans identité de requête — la fermeture de socket d'un
+  ancien envoi abandonnait le transfert en cours.** `req->onDisconnect()` ne
+  transmet aucune identité. En installant directement la fonction statique
+  `_deconnexion`, toute déconnexion pendant un transfert le tuait, y compris
+  celle d'une requête abandonnée ou déjà terminée.
+  → compteur de génération `_gen`, incrémenté à chaque `Update.begin()`
+  réussi et capturé par une lambda (`ArDisconnectHandler` est un
+  `std::function<void(void)>`, donc la capture est permise). `_deconnexion(gen)`
+  ignore toute déconnexion qui ne concerne pas le transfert courant.
+
+- **🟠 `liberer()` n'abandonnait pas `Update`.** Elle remettait `_e.enCours` à
+  faux mais laissait `_arme` à vrai ET l'image ouverte. Or
+  `UpdaterClass::begin()` refuse de démarrer tant que `_size > 0`
+  (« already running ») : un transfert abandonné par l'application bloquait
+  TOUS les envois suivants jusqu'au redémarrage, et l'appelant devait penser à
+  appeler `esp_otaAbandonner()` lui-même — un piège qu'une fonction nommée
+  « libérer » ne doit pas laisser.
+  → `liberer()` appelle `esp_otaAbandonner()` si `_arme`, puis purge
+  `_reqArmee`. Sans danger : sur ESP8266, `Update.end()` sur une image
+  incomplète passe par `_reset()` + `return false` et n'est jamais marquée
+  démarrable ; sur une image déjà terminée `_arme` est faux.
+
+- **🟠 Deux chemins laissaient `Update` ouvert en remettant `_arme` à faux avant
+  `liberer()`** : l'échec d'écriture (`Update.write()` incomplet) et le fichier
+  de 0 octet. Ils laissent maintenant `liberer()` abandonner l'image.
+
+### Vérifié
+
+- Compilation croisée ESP8266 (core 3.1.2) : **SUCCESS**, aucune régression de
+  taille notable.
+- Comportement de `Update.end()` sur image incomplète relu dans
+  `framework-arduinoespressif8266/cores/esp8266/Updater.cpp` : branche
+  `hasError() || (!isFinished() && !evenIfRemaining)` → `_reset()` puis
+  `return false`, donc jamais marquée démarrable.
+- Détecté par la revue de code du Coulométre (finding R15) après l'ajout, côté
+  application, du filet `ota.transfertMort()` — c'est ce filet qui a rendu le
+  scénario atteignable.
+
+---
+
 ## [1.1.0] — 15/11/2026
 
 ### Ajouté

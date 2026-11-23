@@ -201,14 +201,35 @@ public:
    *  `false` (défaut) = espace sketch libre moins la marge. */
   void tailleInconnue(bool v) { _tailleInconnue = v; }
 
-  /** Libère l'état du transfert et désabonne le chien de garde.
-   *  Idempotent — appelé sur tous les chemins de sortie. */
+  /** Libère l'état du transfert, ABANDONNE l'image si elle était armée, et
+   *  désabonne le chien de garde.
+   *
+   *  Idempotent — appelé sur tous les chemins de sortie.
+   *
+   *  ⚠️ v1.1.1 — CETTE FONCTION N'ABANDONNAIT PAS `Update`. Elle remettait
+   *  `_e.enCours` à faux mais laissait `_arme` à vrai ET l'image en cours
+   *  d'écriture ouverte. Conséquence mesurée côté application (Coulométre) :
+   *  `UpdaterClass::begin()` refuse de démarrer tant que `_size > 0`
+   *  (« already running »), donc un transfert abandonné par l'application
+   *  bloquait TOUS les envois suivants jusqu'au redémarrage. L'appelant devait
+   *  donc penser à appeler `esp_otaAbandonner()` lui-même — un piège qu'une
+   *  fonction nommée « libérer » ne doit pas laisser.
+   *  `esp_otaAbandonner()` est sans danger ici : sur ESP8266, `Update.end()`
+   *  sur une image incomplète passe par `_reset()` + `return false`, elle n'est
+   *  donc jamais marquée démarrable ; sur une image déjà terminée `_arme` est
+   *  faux et l'appel n'a pas lieu.
+   */
   void liberer()
   {
     if (_e.chienAbonne) {
       _e.chienAbonne = false;
       if (_chienRetirer) _chienRetirer();
     }
+    if (_arme) {                 // v1.1.1 : image ouverte → abandon RÉEL
+      esp_otaAbandonner();
+      _arme = false;
+    }
+    _reqArmee  = nullptr;        // v1.1.1 : plus aucune requête propriétaire
     _e.enCours = false;
   }
 
@@ -401,7 +422,16 @@ private:
 
       // A3 : la coupure n'a pas d'autre signal que onDisconnect(). On
       //      l'arme ici, une fois, pour cette requête.
-      req->onDisconnect(_deconnexion);
+      //
+      // ⚠️ v1.1.1 — `onDisconnect()` ne transmet AUCUNE identité de requête.
+      // En installant directement `_deconnexion` (une statique), la coupure
+      // d'un envoi ABANDONNÉ abandonnait le transfert d'un envoi PLUS RÉCENT.
+      // On capture donc la GÉNÉRATION de ce transfert : `_deconnexion` ignore
+      // toute déconnexion qui ne concerne pas le transfert courant.
+      // `ArDisconnectHandler` est un `std::function<void(void)>`, donc une
+      // lambda capturante est acceptée.
+      const uint32_t gen = ++o->_gen;
+      req->onDisconnect([gen]() { _deconnexion(gen); });
 
       bool commence = false;
 #if defined(ESP32)
@@ -425,7 +455,11 @@ private:
       }
       // A2 : mémorisé pour pouvoir abandonner si `_final()` n'a jamais de
       //      signal de fin (fichier vide, coupure silencieuse).
-      o->_arme = true;
+      // v1.1.1 : on mémorise AUSSI la requête propriétaire — sans elle,
+      // `_final()` d'un envoi abandonné abandonnait l'image d'un envoi plus
+      // récent (voir `_final`).
+      o->_arme     = true;
+      o->_reqArmee = req;
       if (o->_surDebut) o->_surDebut();
     }
 
@@ -440,7 +474,10 @@ private:
         o->_e.dernier = OTA_ECHEC;
         esp_otaMsgErreur(o->_e.message, sizeof(o->_e.message), "write");
         Update.printError(Serial);
-        o->_arme = false;
+        // v1.1.1 — on ne remet PLUS `_arme` à faux ici : `liberer()` s'en
+        // charge en ABANDONNANT réellement l'image. Avant, `_arme = false`
+        // laissait `Update` ouvert et le `Update.begin()` suivant échouait
+        // (« already running ») jusqu'au redémarrage.
         o->liberer();
         return;
       }
@@ -461,8 +498,8 @@ private:
     // framework changerait, et évite Update.end() sur un tampon jamais
     // alloué — message trompeur « Flash Read Failed ».
     if (total == 0) {
-      esp_otaAbandonner();
-      o->_arme = false;
+      // v1.1.1 — l'abandon est fait par `liberer()` (qui purge aussi
+      // `_reqArmee`) : plus d'appel explicite à `esp_otaAbandonner()` ici.
       o->_e.echecs++;
       o->_e.dernier = OTA_ECHEC;
       snprintf(o->_e.message, sizeof(o->_e.message), "fichier vide (0 octet)");
@@ -495,10 +532,16 @@ private:
   //    normalement. La garde N2 (ne pas invalider une image déjà valide)
   //    est donc OBLIGATOIRE ici — même constat qu'en synchrone, où
   //    `Parsing.cpp` livrait ABORTED après END.
-  static void _deconnexion()
+  static void _deconnexion(uint32_t gen)
   {
     ESP_OTA_Async* o = _self;
     if (!o) return;
+
+    // ⚠️ v1.1.1 — GÉNÉRATION. `onDisconnect()` est installé par requête mais ne
+    // reçoit aucune identité : sans ce test, la fermeture de socket d'un envoi
+    // ABANDONNÉ (ou déjà terminé) abandonnait le transfert en cours d'un envoi
+    // PLUS RÉCENT. Seule la déconnexion du transfert COURANT agit.
+    if (gen != o->_gen) return;
 
     if (o->_e.dernier == OTA_OK) {
       // Image déjà marquée démarrable : on ne fait que programmer le reboot.
@@ -512,8 +555,8 @@ private:
       o->_e.echecs++;
       o->_e.dernier = OTA_ABANDON;
       snprintf(o->_e.message, sizeof(o->_e.message), "transfert interrompu");
-      o->_arme = false;
-      esp_otaAbandonner();
+      // v1.1.1 — `liberer()` abandonne l'image (et purge `_reqArmee`) : plus
+      // d'appel explicite à `esp_otaAbandonner()` ici.
       o->liberer();
       if (o->_surFin) o->_surFin(false);
     }
@@ -541,7 +584,18 @@ private:
 
     // A2 : aucun signal de fin n'a été délivré (fichier vide) mais Update
     //      était armé → abandonner, sinon l'envoi suivant serait bloqué.
-    if (!ok && o->_arme) { esp_otaAbandonner(); o->_arme = false; }
+    //
+    // ⚠️ v1.1.1 — `_arme` SEUL NE SUFFIT PAS. C'est un état GLOBAL : si la
+    // requête A arme l'image puis se tait, qu'elle est abandonnée, puis que la
+    // requête B démarre un nouveau transfert (`_arme` repasse à vrai), le
+    // `_final()` de A — qui peut arriver bien plus tard, à la fermeture de sa
+    // socket — appelait `esp_otaAbandonner()` et DÉTRUISAIT le transfert de B.
+    // On n'abandonne donc que l'image que CETTE requête a armée.
+    if (!ok && o->_arme && o->_reqArmee == req) {
+      esp_otaAbandonner();
+      o->_arme     = false;
+      o->_reqArmee = nullptr;
+    }
 
     if (ok) {
       req->send(200, "text/plain; charset=utf-8", "OK - redemarrage en cours");
@@ -587,6 +641,15 @@ private:
   bool          _gardeMultipart= true;
   bool          _tailleInconnue= false;
   bool          _arme          = false;   // Update.begin() a réussi (A2)
+  // ⚠️ v1.1.1 — `_arme` DOIT être rattaché à la requête qui l'a armé, sinon le
+  // `_final()` d'un envoi abandonné abandonne l'image d'un envoi PLUS RÉCENT.
+  // Même patron que `_reqRefusee` / `_reqAuthKo` (A9), qui l'appliquaient déjà.
+  AsyncWebServerRequest* _reqArmee = nullptr;
+  // ⚠️ v1.1.1 — génération du transfert. `onDisconnect()` ne reçoit AUCUNE
+  // identité de requête : sans ce compteur, la déconnexion d'un ancien envoi
+  // abandonne le transfert en cours. Incrémenté à chaque `Update.begin()`
+  // réussi, capturé par la lambda de `onDisconnect()`.
+  uint32_t      _gen           = 0;
   uint32_t      _delaiMs       = ESP_OTA_DELAI_REBOOT_MS;
   uint32_t      _delaiSansOctet= ESP_OTA_DELAI_MORT_MS;
   OtaEtat       _e;
