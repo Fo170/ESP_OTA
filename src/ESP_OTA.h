@@ -55,7 +55,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#define __ESP_OTA_H_VERSION__ "1.1.1"
+#define __ESP_OTA_H_VERSION__ "1.1.2"
 #define ESP_OTA_VERSION       __ESP_OTA_H_VERSION__
 
 // Route par défaut. Doit rester `/update` : c'est ce que les scripts, les

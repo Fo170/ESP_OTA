@@ -5,6 +5,34 @@ Format : [SemVer](https://semver.org/lang/fr/). Chaque entrée dit **quoi**,
 
 ---
 
+## [1.1.2] — 24/11/2026
+
+### Corrigé
+
+- **🔴 `surFin()` n'était pas appelé quand `Update.write()` échouait — c'est-à-dire
+  pour TOUT envoi qui n'est pas un firmware.** `UpdaterClass::write()` valide le
+  magic (`0xE9`, ou `0x1f` pour gzip) au premier bloc et pose
+  `UPDATE_ERROR_MAGIC_BYTE` (code 13) ; l'écriture revient alors incomplète et
+  `_morceau()` sortait par `liberer()` **sans prévenir l'application**.
+  Conséquence mesurée côté Coulométre : `otaInProgress` et la suspension du
+  chien de garde restaient armés **à vie** — échantillonnage, sauvegardes 5/30 min,
+  Domotique et les gardes R2-R5 figés, et le seul filet capable de secourir la
+  carte lui-même suspendu. `_final()` ne rattrapait pas : il ne rappelle pas
+  `surFin()`.
+  → `if (_surFin) _surFin(false);` sur ce chemin, après `liberer()`.
+  **Règle** : TOUTE sortie de transfert postérieure à `surDebut()` appelle
+  `surFin()`, une seule fois. Vérifié chemin par chemin : les trois refus
+  (auth, crochet, `Update.begin()` en échec) sont **avant** `surDebut()` et ne
+  doivent donc pas l'appeler ; les quatre autres sorties le font.
+
+### Note
+
+Correctif identifié par la revue du Coulométre (pitfall 42) après un test
+d'envoi non-firmware sur l'appareil : `[OTA] ÉCHEC — code 13`, puis plus aucune
+reprise — la carte restait figée jusqu'au redémarrage.
+
+---
+
 ## [1.1.1] — 23/11/2026
 
 ### Corrigé

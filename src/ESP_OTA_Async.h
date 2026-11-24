@@ -479,6 +479,18 @@ private:
         // laissait `Update` ouvert et le `Update.begin()` suivant échouait
         // (« already running ») jusqu'au redémarrage.
         o->liberer();
+        // ⚠️⚠️ v1.1.2 — `surFin()` MANQUAIT SUR CETTE SORTIE.
+        // C'est le chemin de TOUT envoi qui n'est pas un firmware : `UpdaterClass::
+        // write()` valide le magic (`0xE9` ou `0x1f` pour gzip) et pose
+        // `UPDATE_ERROR_MAGIC_BYTE` (code 13) au premier bloc, ce qui rend
+        // l'écriture incomplète. Sans cet appel, l'application n'était jamais
+        // prévenue de la fin : côté Coulométre, `otaInProgress` et la
+        // suspension du chien de garde restaient armés À VIE (échantillonnage,
+        // sauvegardes, Domoticz, R2-R5 figés, et le seul filet capable de
+        // secourir la carte lui-même suspendu). `_final()` ne rattrape pas :
+        // il ne rappelle pas `surFin`. Règle : TOUTE sortie de transfert
+        // appelle `surFin()`, une seule fois.
+        if (o->_surFin) o->_surFin(false);
         return;
       }
       o->_e.taille += (uint32_t)ecrit;
