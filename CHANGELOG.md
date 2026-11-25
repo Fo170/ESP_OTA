@@ -5,6 +5,54 @@ Format : [SemVer](https://semver.org/lang/fr/). Chaque entrée dit **quoi**,
 
 ---
 
+## [1.1.3] — 25/11/2026
+
+### Corrigé
+
+- **🔴 GEL DÉFINITIF sur client muet — `transfertMort()` ne pouvait PAS s'exécuter.**
+  `_uploadReadByte()` du coeur ESP8266 (`Parsing-impl.h:336`) boucle
+  `while (!client.available() && client.connected()) yield();` **sans aucun
+  timeout**. Un client qui envoie les en-têtes puis se tait **en gardant sa
+  socket ouverte** bloque `handleClient()` à vie.
+
+  Conséquence : `loop()` ne reprend jamais la main, donc le filet documenté en
+  1.1.0 (`ota.transfertMort()` testé dans `loop()`) ne peut pas s'exécuter —
+  ni le redémarrage sur panne de l'application. La carte reste injoignable
+  jusqu'à une **coupure d'alimentation**. Déclenchable sans authentification.
+
+  → **Surveillance active (F7)** : à `UPLOAD_FILE_START`, un `Ticker` (tâche
+  SDK, qui continue de tourner pendant que la tâche principale est suspendue)
+  vérifie toutes les 500 ms le silence depuis `dernierOctetMs`. Au-delà de
+  `delaiSansOctet()`, il **coupe la socket**. La boucle bloquée teste
+  `client.connected()` à chaque tour : elle sort, le handler reçoit
+  `UPLOAD_FILE_ABORTED`, `liberer()` abandonne l'image.
+
+  Nouveau réglage `surveillance(bool)` — `true` par défaut ; `false` ne sert
+  qu'à reproduire le défaut. ESP8266 uniquement (autre pile et autre modèle de
+  tâches sur ESP32).
+
+### Vérifié
+
+- Compilation ESP8266 (esp12e) : **SUCCESS**, RAM +140 o / Flash +1 444 o
+  (le `Ticker` et sa fonction de rappel).
+- **Reproduction du défaut sur cible** : socket TCP ouverte sur le port 80,
+  en-têtes multipart envoyés, puis silence total en gardant la connexion.
+  Avant : carte muette, sortie impossible sans coupure d'alimentation.
+  Après : à **t=35 s** (silence de 30 s + marge), la carte **répond à
+  `GET /json`** et **ferme notre socket** (`recv` → `b''`).
+- **Non-régression** : un OTA réel lancé juste après l'abandon répond
+  `200 OK` en 8,6 s — l'image avait bien été libérée (`Update.begin()`
+  n'a pas rencontré « already running »).
+
+### Limite connue
+
+La coupure est faite depuis la tâche SDK (`Ticker`), pas depuis la boucle.
+C'est le seul moyen de reprendre la main sur une lecture bloquante du coeur.
+Si une version future du coeur ajoutait un timeout à `_uploadReadByte()`,
+cette surveillance deviendrait superflue (mais resterait inoffensive).
+
+---
+
 ## [1.1.2] — 24/11/2026
 
 ### Corrigé

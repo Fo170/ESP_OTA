@@ -70,6 +70,14 @@
 //       empêche la récursion (voir la fin du tronc).
 #include "ESP_OTA.h"
 
+// ⚠️ Ticker : surveillance d'un transfert muet. La boucle `_uploadReadByte`
+//    du coeur ESP8266 n'a AUCUN timeout ; `loop()` ne reprend pas la main
+//    tant qu'elle bloque. Seul un minuteur peut couper la socket depuis la
+//    tâche SDK, ce qui débloque la boucle (elle teste `client.connected()`).
+#if defined(ESP8266)
+  #include <Ticker.h>
+#endif
+
 // ⚠️ La librairie doit être AUTONOME : sans le header du serveur web, HTTP_GET,
 //    HTTP_POST, HTTPUpload, UPLOAD_FILE_* et CONTENT_LENGTH_UNKNOWN ne sont pas
 //    définis. Ne PAS compter sur l'ordre des #include du projet appelant.
@@ -189,6 +197,25 @@ public:
    *  mort. 0 = désactivée. Défaut : 30 s. */
   void delaiSansOctet(uint32_t ms) { _delaiSansOctet = ms; }
 
+  /** Surveillance ACTIVE du transfert muet (F7, ESP8266 uniquement).
+   *
+   *  ⚠️ POURQUOI ELLE EST NÉCESSAIRE
+   *     `_uploadReadByte()` du coeur ESP8266 boucle
+   *        while (!client.available() && client.connected()) yield();
+   *     SANS timeout. Un client qui envoie les en-têtes puis se tait en
+   *     gardant sa socket ouverte fige `handleClient()` À VIE : `loop()` ne
+   *     reprend jamais la main, donc `transfertMort()` ne peut PAS s'exécuter
+   *     et aucun redémarrage de panne ne se déclenche. Seule une coupure
+   *     d'alimentation en sortait.
+   *     → Un `Ticker` (tâche SDK, qui continue de tourner pendant que la
+   *       tâche principale est suspendue) coupe la socket après
+   *       `delaiSansOctet()`. La boucle bloquée voit `connected()` faux,
+   *       sort, et le handler reçoit `UPLOAD_FILE_ABORTED` → image libérée.
+   *
+   *  `true` par défaut. `false` ne se justifie que pour reproduire le défaut.
+   *  Sans effet sur ESP32 (autre pile, autre modèle de tâches). */
+  void surveillance(bool v) { _survActif = v; }
+
   /** Vrai si le transfert en cours n'a plus donné signe de vie depuis
    *  `delaiSansOctet()`. À tester depuis la boucle pour couper court. */
   bool transfertMort() const
@@ -229,6 +256,10 @@ public:
       if (_chienRetirer) _chienRetirer();
     }
     _e.enCours = false;
+#if defined(ESP8266)
+    _surv.detach();      // F7 : plus rien à surveiller
+    _survTire = false;
+#endif
   }
 
   /** Redémarrage différé : à appeler à chaque tour de boucle. */
@@ -400,6 +431,16 @@ private:
           o->_chienAjouter();
         }
         if (o->_chienRearmer) o->_chienRearmer();
+
+#if defined(ESP8266)
+        // F7 : armer la surveillance du transfert muet. À partir d'ici, la
+        // boucle de lecture peut bloquer sans timeout ; le minuteur est le
+        // seul moyen de reprendre la main.
+        if (o->_survActif && o->_delaiSansOctet > 0) {
+          o->_survTire = false;
+          o->_surv.attach_ms(500, _survTick);
+        }
+#endif
 
         // Taille annoncée : en multipart elle n'est pas connue ici.
         //   ESP32   : UPDATE_SIZE_UNKNOWN laisse le coeur choisir la partition
@@ -579,6 +620,17 @@ private:
   uint32_t    _delaiSansOctet= ESP_OTA_DELAI_MORT_MS;
   OtaEtat     _e;
 
+  // ── F7 : surveillance du transfert muet (ESP8266) ──────────────
+  // `_uploadReadByte()` du coeur n'a pas de timeout : un client silencieux
+  // bloque `handleClient()` à vie, donc `loop()` ne peut rien faire. Le
+  // minuteur ci-dessous tourne dans la tâche SDK et coupe la socket.
+  bool        _survActif     = true;
+#if defined(ESP8266)
+  Ticker      _surv;
+  bool        _survTire      = false;   // une seule coupure par transfert
+  static void _survTick();
+#endif
+
   void (*_surDebut)()             = nullptr;
   void (*_surProg)(uint32_t)      = nullptr;
   void (*_surFin)(bool)           = nullptr;
@@ -590,5 +642,30 @@ private:
 
 template <typename Serveur>
 ESP_OTA<Serveur>* ESP_OTA<Serveur>::_self = nullptr;
+
+// ── F7 : minuteur de surveillance du transfert muet (ESP8266) ──────────────
+// Exécuté dans la tâche SDK, PENDANT que la tâche principale est suspendue
+// dans `_uploadReadByte()`. Couper la socket la débloque : la boucle du coeur
+// teste `client.connected()` à chaque tour.
+template <typename Serveur>
+void ESP_OTA<Serveur>::_survTick()
+{
+#if defined(ESP8266)
+  ESP_OTA* o = _self;
+  if (!o || !o->_server) return;
+  if (!o->_e.enCours) return;            // transfert terminé entre deux tics
+  if (o->_survTire) return;              // une seule coupure par transfert
+  if ((millis() - o->_e.dernierOctetMs) <= o->_delaiSansOctet) return;
+
+  o->_survTire      = true;
+  o->_e.echecs++;
+  o->_e.dernier     = OTA_ABANDON;
+  snprintf(o->_e.message, sizeof(o->_e.message), "transfert muet");
+
+  // La boucle bloquée voit connected() faux et sort ; le handler reçoit
+  // ensuite UPLOAD_FILE_ABORTED, qui libère l'image et l'état.
+  o->_server->client().stop();
+#endif
+}
 
 #endif // ESP_OTA_SYNC_H
