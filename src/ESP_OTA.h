@@ -55,7 +55,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#define __ESP_OTA_H_VERSION__ "1.1.3"
+#define __ESP_OTA_H_VERSION__ "1.1.4"
 #define ESP_OTA_VERSION       __ESP_OTA_H_VERSION__
 
 // Route par défaut. Doit rester `/update` : c'est ce que les scripts, les
@@ -81,6 +81,14 @@
 // 30 s laisse une marge énorme sans jamais geler la carte.
 #ifndef ESP_OTA_DELAI_MORT_MS
   #define ESP_OTA_DELAI_MORT_MS  30000UL
+#endif
+
+// Escalade de la surveillance F7 : apres avoir coupe la socket, on laisse ce
+// delai au coeur pour sortir de `_uploadReadByte()`. Si la boucle est toujours
+// bloquee, la pile WiFi elle-meme est figee (`connected()` ment encore) et
+// seul un redemarrage en sort — meme motif que WiFiManagerESP 0.12.0.
+#ifndef ESP_OTA_SURV_ESCALADE_MS
+  #define ESP_OTA_SURV_ESCALADE_MS  10000UL
 #endif
 
 /** Résultat du dernier transfert. */

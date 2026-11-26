@@ -220,7 +220,8 @@ API**. Les tableaux ci-dessous valent pour les deux.
 | `ESP_OTA_MARGE` | `0x1000` | marge sous l'espace sketch |
 | `ESP_OTA_DELAI_REBOOT_MS` | `1500` | délai avant redémarrage |
 | `ESP_OTA_DELAI_MORT_MS` | `30000` | silence toléré entre deux morceaux |
-| `ESP_OTA_VERSION` | `"1.1.0"` | version de la librairie |
+| `ESP_OTA_SURV_ESCALADE_MS` | `10000` | délai après la coupure de socket avant `ESP.restart()` (F7) |
+| `ESP_OTA_VERSION` | `"1.1.4"` | version de la librairie |
 
 ---
 

@@ -5,6 +5,55 @@ Format : [SemVer](https://semver.org/lang/fr/). Chaque entrée dit **quoi**,
 
 ---
 
+## [1.1.4] — 26/11/2026
+
+### Corrigé
+
+- **🔴 LA COMPILATION ESP32 ÉTAIT CASSÉE depuis 1.1.3.**
+  `_survTick()` était **déclarée** dans le bloc `#if defined(ESP8266)` de la
+  classe (membre `static void _survTick();`) mais **définie** hors de tout
+  garde. Sur ESP8266 le garde interne au corps suffisait ; sur ESP32 la
+  déclaration n'existe pas et le compilateur refuse la définition :
+
+  ```
+  ESP_OTA_Sync.h:651:6: error: no declaration matches 'void ESP_OTA<Serveur>::_survTick()'
+  ESP_OTA_Sync.h:103:7: note: 'class ESP_OTA<Serveur>' defined here
+  ```
+
+  → La définition est désormais entièrement sous `#if defined(ESP8266)`, et le
+  `#if` interne au corps est retiré (il n'avait plus de raison d'être).
+
+- **🟠 F7 ne couvrait que la moitié du défaut : socket coupée sans effet.**
+  `_survTick()` supposait que `client().stop()` débloque `_uploadReadByte()`.
+  Si la pile WiFi est elle-même figée — `WiFi.status()` reste `WL_CONNECTED`
+  et `client.connected()` continue de mentir, exactement le scénario constaté
+  sur `WiFiManagerESP` 0.12.0 — l'arrêt de socket ne réveille rien, et
+  `_survTire` **interdisait une seconde tentative**. La carte restait gelée
+  alors que F7 est documentée comme le remède définitif.
+
+  → **Escalade** : si la boucle est toujours bloquée
+  `ESP_OTA_SURV_ESCALADE_MS` (10 s par défaut) après la coupure, le minuteur
+  appelle `ESP.restart()`. L'image en cours d'écriture est abandonnée : sur
+  les deux plateformes le bootloader conserve l'ancien sketch, donc le
+  redémarrage est sûr.
+
+- **🟡 `surveillance(false)` n'arrêtait pas un minuteur déjà armé.**
+  `_survTick()` ne relisait pas `_survActif`. Le drapeau est maintenant testé à
+  chaque tic, ce qui rend le réglage effectif à chaud.
+
+  Nouveau réglage `ESP_OTA_SURV_ESCALADE_MS` (surchargeable par `build_flags`).
+
+### Vérifié
+
+- Compilation **ESP8266 (d1_mini)** : SUCCESS, RAM 43 716 o / Flash 394 059 o
+  (projet `iOT_Noyau_Vide`, +164 o de flash pour l'escalade).
+- Compilation **ESP32 (esp32dev, espressif32@7.1.3)** : SUCCESS, RAM 52 868 o /
+  Flash 890 013 o — c'est cette cible qui échouait en 1.1.3.
+- Les deux cibles compilent depuis un `libdeps` vierge (tag, pas de copie
+  patchée à la main).
+
+---
+
 ## [1.1.3] — 25/11/2026
 
 ### Corrigé

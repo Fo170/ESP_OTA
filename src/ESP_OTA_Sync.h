@@ -647,15 +647,26 @@ ESP_OTA<Serveur>* ESP_OTA<Serveur>::_self = nullptr;
 // Exécuté dans la tâche SDK, PENDANT que la tâche principale est suspendue
 // dans `_uploadReadByte()`. Couper la socket la débloque : la boucle du coeur
 // teste `client.connected()` à chaque tour.
+#if defined(ESP8266)
 template <typename Serveur>
 void ESP_OTA<Serveur>::_survTick()
 {
-#if defined(ESP8266)
   ESP_OTA* o = _self;
   if (!o || !o->_server) return;
+  if (!o->_survActif) return;            // surveillance desactivee a chaud
   if (!o->_e.enCours) return;            // transfert terminé entre deux tics
-  if (o->_survTire) return;              // une seule coupure par transfert
   if ((millis() - o->_e.dernierOctetMs) <= o->_delaiSansOctet) return;
+
+  // La socket a deja ete coupee et la boucle bloquee ne sort pas : la pile
+  // WiFi est figee (`connected()` ment encore). Rien d'autre n'en sort.
+  if (o->_survTire) {
+    if ((millis() - o->_e.dernierOctetMs)
+        > o->_delaiSansOctet + ESP_OTA_SURV_ESCALADE_MS) {
+      Serial.println(F("[ESP_OTA] transfert muet : socket coupee sans effet -> redemarrage"));
+      ESP.restart();
+    }
+    return;
+  }
 
   o->_survTire      = true;
   o->_e.echecs++;
@@ -665,7 +676,7 @@ void ESP_OTA<Serveur>::_survTick()
   // La boucle bloquée voit connected() faux et sort ; le handler reçoit
   // ensuite UPLOAD_FILE_ABORTED, qui libère l'image et l'état.
   o->_server->client().stop();
-#endif
 }
+#endif // ESP8266
 
 #endif // ESP_OTA_SYNC_H
